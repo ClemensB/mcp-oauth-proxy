@@ -39,7 +39,9 @@ describe('createJwtVerifier', () => {
   })
 
   it('refreshes JWKS after key rotation', async () => {
-    const verify = createJwtVerifier({ issuerUrl: oidc.issuerUrl, audience: 'test-aud' })
+    // Explicit short cooldown: the production default (jose's 30s) deliberately rate-limits refetches,
+    // so rotation would not converge inside a test.
+    const verify = createJwtVerifier({ issuerUrl: oidc.issuerUrl, audience: 'test-aud', jwksCooldownMs: 0 })
     const before = await oidc.signToken({ sub: 'user-1' }, { audience: 'test-aud' })
     await verify(before)
 

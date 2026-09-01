@@ -49,13 +49,29 @@ export const createAuthMiddleware = (opts: AuthMiddlewareOptions): RequestHandle
       return
     }
 
-    const sub = typeof claims.sub === 'string' ? claims.sub : ''
+    const sub = typeof claims.sub === 'string' ? claims.sub.trim() : ''
+    // A token with no usable `sub` is rejected outright: it can't be allow-listed by subject, can't be
+    // attributed in the audit log, and can't be rate-limited (the limiter is keyed on `sub`).
+    if (!sub) {
+      logger.warn('token verified but carries no usable sub claim')
+      res.setHeader('www-authenticate', wwwAuthenticateFor('invalid', opts.resourceUrl))
+      res.status(401).json({ error: 'invalid token' })
+      return
+    }
+
     const email = typeof claims['email'] === 'string' ? (claims['email'] as string) : undefined
-    const groups = Array.isArray(claims['groups']) ? (claims['groups'] as string[]) : []
+    // Only a verified email may satisfy the allow-list. On an IdP that permits self-signup, an
+    // unverified `email` claim is attacker-chosen — anyone could claim an allow-listed address.
+    const emailVerified = claims['email_verified'] === true
+    const groups = Array.isArray(claims['groups']) ? claims['groups'].filter((g) => typeof g === 'string') : []
 
     const subOk = opts.allowSubs.length > 0 && opts.allowSubs.includes(sub)
-    const emailOk = !!email && opts.allowEmails.length > 0 && opts.allowEmails.includes(email)
+    const emailOk = !!email && emailVerified && opts.allowEmails.length > 0 && opts.allowEmails.includes(email)
     const groupOk = opts.allowGroups.length > 0 && groups.some((g) => opts.allowGroups.includes(g))
+
+    if (!emailVerified && !!email && opts.allowEmails.includes(email)) {
+      logger.warn({ email }, 'email matches allow-list but email_verified is not true — refusing to match on it')
+    }
 
     if (!subOk && !emailOk && !groupOk) {
       logger.warn({ sub, email, groups }, 'token verified but not in allow-list')
