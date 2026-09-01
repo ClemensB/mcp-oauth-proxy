@@ -8,7 +8,7 @@ OAuth bearer-token wrapper for HTTP-transport MCP servers. Resource-server only 
 
 ## How it fits
 
-The proxy advertises itself as **both** the resource server and the authorization server (RFC 8414). MCP clients (e.g. Claude.ai) discover the proxy's `/.well-known/oauth-authorization-server`, which rewrites `issuer` to match the proxy's URL. The actual `authorize` and `token` endpoints still point at the upstream IdP — clients follow those URLs directly. Token verification uses the upstream's JWKS (tokens carry `iss=upstream`; the JWT verifier is already configured with the upstream issuer URL).
+The proxy advertises itself as **both** the resource server and the authorization server (RFC 8414). MCP clients (e.g. Claude.ai) discover the proxy's `/.well-known/oauth-authorization-server`, which the proxy serves by fetching the upstream IdP's metadata and passing it through — the `issuer` value is preserved as-is, so it still names the upstream. The `authorize` and `token` endpoints likewise still point at the upstream IdP, and clients follow those URLs directly. Token verification uses the upstream's JWKS (tokens carry `iss=upstream`; the JWT verifier is configured with the upstream issuer URL).
 
 ```
          ┌──────────────────┐         ┌──────────────────┐
@@ -76,7 +76,7 @@ app.listen(8080)
 | `OIDC_AUDIENCE`        | yes          | Expected `aud` claim.                                                                                                                                                                                                                                                             |
 | `RESOURCE_URL`         | yes          | This proxy's public URL. Used in the protected-resource discovery doc.                                                                                                                                                                                                            |
 | `ALLOW_SUBS`           | one of these | Comma-separated allow-list of token `sub` values.                                                                                                                                                                                                                                 |
-| `ALLOW_EMAILS`         |              | Comma-separated allow-list of token `email` values.                                                                                                                                                                                                                               |
+| `ALLOW_EMAILS`         |              | Comma-separated allow-list of token `email` values. Only matches when the token also carries `email_verified: true` — an unverified address is attacker-chosen on any IdP that permits self-signup.                                                                               |
 | `ALLOW_GROUPS`         |              | Comma-separated allow-list of token `groups` claim values.                                                                                                                                                                                                                        |
 | `MCP_UPSTREAM_URL`     | xor          | Existing HTTP MCP to proxy to.                                                                                                                                                                                                                                                    |
 | `MCP_SPAWN_CMD`        | xor          | Command to spawn as a child process.                                                                                                                                                                                                                                              |
@@ -106,16 +106,19 @@ The proxy will:
 1. Host `POST /oauth/register` — returns your pre-configured credentials to any caller (no validation of the request body beyond parsing it).
 2. Inject `registration_endpoint` into the proxy's `/.well-known/oauth-authorization-server` discovery doc (with `issuer` rewritten to the proxy's own URL) so clients see DCR as available.
 
-The upstream provider's redirect_uri whitelist still governs which callbacks are accepted at `/authorize` time, so adding only the real Claude.ai callback URL to the whitelist is the correct security boundary.
+The upstream provider's redirect_uri whitelist still governs which callbacks are accepted at `/authorize` time, so adding only the real Claude.ai callback URL to the whitelist is the primary security boundary.
 
-**Note on issuer rewriting:** The proxy rewrites `issuer` in the `/.well-known/oauth-authorization-server` response to its own `RESOURCE_URL`. This satisfies RFC 8414's requirement that the `issuer` value matches the URL from which the metadata was fetched. The `authorize` and `token` endpoint URLs remain pointing at the upstream IdP — MCP clients follow those directly. JWT tokens still carry the upstream's `iss` claim and the proxy's JWT verifier is configured accordingly.
+> **Understand what this endpoint gives away.** It publishes your OIDC `client_secret` to anyone who can reach the proxy. The redirect_uri whitelist contains that only for the authorization-code flow, where the secret alone gets an attacker nowhere. It does **not** help if the same upstream client also permits a grant that involves no redirect — `client_credentials` or resource-owner password — because those can be driven with the secret directly against the token endpoint. If you enable static DCR, restrict the upstream client to `authorization_code` (plus `refresh_token`) and nothing else. Better still, if your provider supports a public client with PKCE and no secret at all, use that and leave `STATIC_CLIENT_SECRET` unset.
+
+**Note on the issuer value:** The proxy serves `/.well-known/oauth-authorization-server` from its own URL but preserves the upstream IdP's `issuer` value verbatim, because tokens are signed by the upstream and carry the upstream's `iss` claim — clients that check the token's `iss` against the metadata's `issuer` need the two to match. This technically violates RFC 8414 §3.3, which requires `issuer` to match the URL the metadata was fetched from; a strict client would reject it. Claude.ai tolerates it today. See the comment in `src/discovery.ts` for what a stricter client would force (proxying the token endpoint and re-signing).
 
 ## Security model
 
 - **Resource-server only** — does not initiate OAuth flows or maintain user state.
 - **Allow-list gating** — even after JWT verification, the request is rejected unless the token's `sub`, `email`, or one of its `groups` matches a configured list.
-- **Per-`sub` rate limiting** — default 60 req/min as defense-in-depth.
-- **Audit log** — every authenticated request is logged at info level (sub, method, path, ts).
+- **Per-`sub` rate limiting** — default 60 req/min as defense-in-depth. Tokens without a usable `sub` are rejected, so every admitted request is attributable and rate-limited.
+- **Credentials stop here** — the caller's `Authorization` (and `Cookie`) header is stripped before the request is forwarded, so the upstream MCP never sees a live IdP access token. This matters most under `MCP_SPAWN_CMD`, where the upstream is arbitrary third-party code.
+- **Audit log** — every request is logged at info level (method, path, status, latency), including the authenticated `sub` once auth has run.
 
 **Suitable for:** personal deployments, small-team MCPs, internal tools.
 **Not suitable for:** multi-tenant SaaS — allow-list and rate-limit are per-process; use a real authorization service for that.

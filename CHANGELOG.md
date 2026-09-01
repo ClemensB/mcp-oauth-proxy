@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0
+
+Security release. Anyone running 0.3.x should upgrade; the first item below is exploitable without any token.
+
+- **fix(auth): unauthenticated requests could reach the upstream MCP.** The auth middleware skipped any path starting with `/.well-known/`, plus `/healthz` and `/oauth/register`. Those exemptions called `next()`, which continued down the stack into the catch-all proxy rather than ending the request — so `POST /healthz`, `POST /.well-known/anything`, and (when static DCR was unconfigured) `POST /oauth/register` were forwarded to the upstream with no token, no allow-list check, and no rate limit. With `MCP_UPSTREAM_PATH` set — as in the README's own example — the rewrite pointed them straight at the MCP endpoint. The exemptions were also unnecessary: the public routes are registered above the auth middleware and answer their own requests.
+- **fix(proxy): stop forwarding the caller's `Authorization` header upstream.** The README already described the upstream as receiving no auth headers; it was in fact receiving the user's bearer token, which under `MCP_SPAWN_CMD` hands a live IdP access token to arbitrary third-party code. `Cookie` is stripped too.
+- **fix(jwt): restore jose's JWKS refetch cooldown.** `cooldownDuration: 0` let any anonymous caller force one upstream JWKS fetch per request by presenting a JWT with an unknown `kid`, using the proxy to amplify traffic at the IdP. The cooldown is now jose's 30s default, exposed as `jwksCooldownMs` for tests.
+- **fix(auth): require `email_verified` for `ALLOW_EMAILS` matches.** On an IdP permitting self-signup, an unverified `email` claim is attacker-chosen, so an allow-listed address could be claimed by anyone.
+- **fix(auth): reject tokens with no usable `sub`.** Such a token could be admitted via the group or email allow-list, then bypass the rate limiter entirely (keyed on `sub`) and appear unattributed in the audit log.
+- **fix(jwt): pin verification to asymmetric algorithms**, so a symmetric or malformed JWKS entry can't be used to forge an accepted token.
+- **fix(discovery): cache upstream metadata (5 min) and bound the fetch (5s)** — this endpoint is unauthenticated and made one outbound request per hit.
+- **fix(proxy): preserve the query string** when rewriting to `MCP_UPSTREAM_PATH`.
+- **feat(logging): include the authenticated `sub`** in the per-request log line, making the documented audit trail actually attributable.
+- **docs:** correct the README's description of `issuer` handling, which still described pre-0.3.1 behaviour, and spell out the exposure created by the static DCR endpoint.
+
 ## 0.3.3
 
 - fix: scope `express.json()` to `/oauth/register` only — global body parser was draining proxied request bodies before http-proxy-3 could forward them, causing upstream MCP to see "request aborted"
