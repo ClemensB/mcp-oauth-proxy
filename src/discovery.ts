@@ -13,9 +13,16 @@ export type DiscoveryOptions = {
   scopesSupported?: string[]
 }
 
+// This endpoint is unauthenticated by necessity, and each miss makes an outbound request. Cache the
+// upstream document so a flood of anonymous discovery hits can't be amplified into a flood against the
+// IdP, and bound each fetch so slow upstreams can't pin sockets open here.
+const METADATA_TTL_MS = 300_000
+const UPSTREAM_FETCH_TIMEOUT_MS = 5_000
+
 export const mountDiscovery = (app: Express, opts: DiscoveryOptions) => {
   const resource = opts.resourceUrl.replace(/\/$/, '')
   const scopes = opts.scopesSupported ?? ['openid', 'profile', 'email', 'offline_access']
+  let cached: { at: number; body: Record<string, unknown> } | undefined
 
   // RFC 9728 — point authorization_servers at the proxy itself so MCP clients fetch our auth-server metadata.
   app.get('/.well-known/oauth-protected-resource', (_req, res) => {
@@ -38,12 +45,16 @@ export const mountDiscovery = (app: Express, opts: DiscoveryOptions) => {
   app.get('/.well-known/oauth-authorization-server', async (_req, res) => {
     const upstream = new URL('.well-known/openid-configuration', ensureTrailingSlash(opts.issuerUrl))
     try {
-      const upstreamRes = await fetch(upstream)
-      if (!upstreamRes.ok) {
-        res.status(502).json({ error: `upstream issuer returned ${upstreamRes.status}` })
-        return
+      let upstreamJson = cached && Date.now() - cached.at < METADATA_TTL_MS ? cached.body : undefined
+      if (!upstreamJson) {
+        const upstreamRes = await fetch(upstream, { signal: AbortSignal.timeout(UPSTREAM_FETCH_TIMEOUT_MS) })
+        if (!upstreamRes.ok) {
+          res.status(502).json({ error: `upstream issuer returned ${upstreamRes.status}` })
+          return
+        }
+        upstreamJson = (await upstreamRes.json()) as Record<string, unknown>
+        cached = { at: Date.now(), body: upstreamJson }
       }
-      const upstreamJson = (await upstreamRes.json()) as Record<string, unknown>
 
       // Preserve upstream issuer/endpoints; only add scopes + (optionally) the static-DCR registration_endpoint.
       const rewritten: Record<string, unknown> = {
