@@ -9,9 +9,9 @@ export type OidcFixture = {
   close: () => Promise<void>
 }
 
-export const startOidcFixture = async (): Promise<OidcFixture> => {
-  let { privateKey, publicKey } = await generateKeyPair('RS256')
-  let jwk: JWK & { kid: string } = { ...(await exportJWK(publicKey)), kid: 'k1', alg: 'RS256', use: 'sig' }
+export const startOidcFixture = async (alg = 'RS256'): Promise<OidcFixture> => {
+  let { privateKey, publicKey } = await generateKeyPair(alg)
+  let jwk: JWK & { kid: string } = { ...(await exportJWK(publicKey)), kid: 'k1', alg, use: 'sig' }
 
   const server: Server = createServer((req, res) => {
     if (req.url?.startsWith('/.well-known/openid-configuration')) {
@@ -48,7 +48,7 @@ export const startOidcFixture = async (): Promise<OidcFixture> => {
     jwksUrl: `${issuerUrl}/jwks`,
     signToken: async (claims, opts = {}) => {
       const jwt = new SignJWT(claims)
-        .setProtectedHeader({ alg: 'RS256', kid: jwk.kid })
+        .setProtectedHeader({ alg, kid: jwk.kid })
         .setIssuer(issuerUrl)
         .setIssuedAt()
         .setExpirationTime(opts.expiresIn ?? '5m')
@@ -56,10 +56,10 @@ export const startOidcFixture = async (): Promise<OidcFixture> => {
       return jwt.sign(privateKey)
     },
     rotateKey: async () => {
-      const next = await generateKeyPair('RS256')
+      const next = await generateKeyPair(alg)
       privateKey = next.privateKey
       publicKey = next.publicKey
-      jwk = { ...(await exportJWK(publicKey)), kid: `k${Date.now()}`, alg: 'RS256', use: 'sig' }
+      jwk = { ...(await exportJWK(publicKey)), kid: `k${Date.now()}`, alg, use: 'sig' }
     },
     close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
   }

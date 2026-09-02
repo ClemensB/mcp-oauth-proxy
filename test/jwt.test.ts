@@ -51,6 +51,20 @@ describe('createJwtVerifier', () => {
     expect(claims.sub).toBe('user-2')
   })
 
+  it('accepts EdDSA (Ed25519) signed tokens', async () => {
+    // The algorithm allowlist pins asymmetric algs; EdDSA is asymmetric and used by real IdPs —
+    // omitting it silently locks out every user of an Ed25519-signing issuer.
+    const ed = await startOidcFixture('EdDSA')
+    try {
+      const verify = createJwtVerifier({ issuerUrl: ed.issuerUrl, audience: 'test-aud' })
+      const token = await ed.signToken({ sub: 'user-1' }, { audience: 'test-aud' })
+      const claims = await verify(token)
+      expect(claims.sub).toBe('user-1')
+    } finally {
+      await ed.close()
+    }
+  })
+
   it('rejects malformed tokens', async () => {
     const verify = createJwtVerifier({ issuerUrl: oidc.issuerUrl, audience: 'test-aud' })
     await expect(verify('not.a.jwt')).rejects.toThrow()
