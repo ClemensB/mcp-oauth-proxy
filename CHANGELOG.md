@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1
+
+Hardening follow-up to 0.4.0. Availability fixes around the two unauthenticated IdP-fetch paths, plus header-hygiene and audit-log corrections.
+
+- **fix(jwt): bound and retry the OIDC-config bootstrap.** The fetch of `.well-known/openid-configuration` had no timeout and ran once at startup; an IdP that was down or hung when the proxy booted either blocked every request or poisoned the verifier permanently (all tokens 401 until restart). The fetch is now bounded to 5s, shared across concurrent requests, and retried after failure with a 30s cooldown.
+- **fix(jwt): allow EdDSA.** The asymmetric-only algorithm pinning omitted EdDSA, silently locking out every user of an Ed25519-signing issuer.
+- **fix(discovery): close the remaining metadata amplification.** Concurrent cold-cache hits each made their own IdP request, and failures were never cached — so during an IdP incident the endpoint reverted to one outbound request per anonymous hit. Concurrent misses now share one in-flight fetch; failures are negatively cached for 5s.
+- **fix(proxy): strip `Proxy-Authorization`** alongside `Authorization` and `Cookie`, and enable `xfwd` so the real peer address is appended to `X-Forwarded-*` — a caller can no longer be the last word on its own source address to an upstream that trusts those headers.
+- **fix(log): `hasAuth` was read after the proxy stripped the Authorization header**, logging every authenticated proxied request as tokenless and inverting the audit trail. It is now captured when the request enters the stack.
+
 ## 0.4.0
 
 Security release. Anyone running 0.3.x should upgrade; the first item below is exploitable without any token.
