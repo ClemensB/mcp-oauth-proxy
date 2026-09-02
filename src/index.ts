@@ -33,6 +33,9 @@ const buildApp = (opts: {
   // Request log — runs before auth so we can see all incoming requests including 401-bound ones.
   app.use((req, res, next) => {
     const start = Date.now()
+    // Captured now, not at 'finish': the proxy strips the Authorization header before forwarding, so
+    // reading it after the response would log every authenticated proxied request as tokenless.
+    const hasAuth = !!req.header('authorization')
     res.on('finish', () => {
       logger.info(
         {
@@ -44,7 +47,7 @@ const buildApp = (opts: {
           ua: req.header('user-agent'),
           contentType: req.header('content-type'),
           accept: req.header('accept'),
-          hasAuth: !!req.header('authorization'),
+          hasAuth,
           // Populated by the auth middleware before this 'finish' handler runs, so authenticated
           // requests are attributable in the audit log.
           sub: (req as express.Request & { auth?: { sub: string } }).auth?.sub,
