@@ -1,0 +1,6 @@
+# pnpm 11 refuses to run a dependency's install scripts unless they are declared here, and treats an
+# undeclared one as a hard error — `pnpm install --frozen-lockfile` exits 1 without this file.
+# esbuild (a devDependency, via tsx and vitest) is the only package that asks. Its postinstall only
+# resolves the platform binary that the lockfile's optional deps already provide, so it is skipped.
+allowBuilds:
+  esbuild: false
