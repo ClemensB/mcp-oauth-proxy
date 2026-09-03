@@ -1,4 +1,5 @@
 import type { Express } from 'express'
+import { createIssuerMetadataFetcher, IssuerMetadataError, type IssuerMetadataFetcher } from './issuer-metadata.js'
 import { logger } from './logger.js'
 
 export type DiscoveryOptions = {
@@ -11,31 +12,17 @@ export type DiscoveryOptions = {
   injectRegistrationEndpoint: boolean
   // Comma-separated scopes the resource server supports. Added to protected-resource metadata. Defaults to a sane MCP-y set if undefined.
   scopesSupported?: string[]
+  // Shared issuer-metadata fetcher. Pass the same instance the auth middleware uses so both share one
+  // cache and one in-flight fetch; omitted, this endpoint gets a private one.
+  metadata?: IssuerMetadataFetcher
 }
-
-// This endpoint is unauthenticated by necessity, and each miss makes an outbound request. Cache the
-// upstream document so a flood of anonymous discovery hits can't be amplified into a flood against the
-// IdP, and bound each fetch so slow upstreams can't pin sockets open here. Concurrent misses share one
-// in-flight fetch, and failures are negatively cached — otherwise a cold cache or an IdP that is
-// mid-incident (returning errors, so nothing gets cached) reopens the one-outbound-request-per-hit
-// amplification the positive cache exists to close.
-const METADATA_TTL_MS = 300_000
-const FAILURE_TTL_MS = 5_000
-const UPSTREAM_FETCH_TIMEOUT_MS = 5_000
 
 export const mountDiscovery = (app: Express, opts: DiscoveryOptions) => {
   const resource = opts.resourceUrl.replace(/\/$/, '')
   const scopes = opts.scopesSupported ?? ['openid', 'profile', 'email', 'offline_access']
-  const upstream = new URL('.well-known/openid-configuration', ensureTrailingSlash(opts.issuerUrl))
-  let cached: { at: number; body: Record<string, unknown> } | undefined
-  let inflight: Promise<Record<string, unknown>> | undefined
-  let failedAt = 0
-
-  const fetchUpstreamMetadata = async (): Promise<Record<string, unknown>> => {
-    const upstreamRes = await fetch(upstream, { signal: AbortSignal.timeout(UPSTREAM_FETCH_TIMEOUT_MS) })
-    if (!upstreamRes.ok) throw new Error(`upstream issuer returned ${upstreamRes.status}`)
-    return (await upstreamRes.json()) as Record<string, unknown>
-  }
+  // This endpoint is unauthenticated by necessity and each miss makes an outbound request; the caching
+  // and coalescing that keeps it from amplifying traffic at the IdP lives in the fetcher.
+  const metadata = opts.metadata ?? createIssuerMetadataFetcher({ issuerUrl: opts.issuerUrl })
 
   // RFC 9728 — point authorization_servers at the proxy itself so MCP clients fetch our auth-server metadata.
   app.get('/.well-known/oauth-protected-resource', (_req, res) => {
@@ -57,18 +44,7 @@ export const mountDiscovery = (app: Express, opts: DiscoveryOptions) => {
   // to proxy the token endpoint and re-sign with our own key.
   app.get('/.well-known/oauth-authorization-server', async (_req, res) => {
     try {
-      let upstreamJson = cached && Date.now() - cached.at < METADATA_TTL_MS ? cached.body : undefined
-      if (!upstreamJson) {
-        if (Date.now() - failedAt < FAILURE_TTL_MS) {
-          res.status(502).json({ error: 'upstream issuer unreachable' })
-          return
-        }
-        inflight ??= fetchUpstreamMetadata().finally(() => {
-          inflight = undefined
-        })
-        upstreamJson = await inflight
-        cached = { at: Date.now(), body: upstreamJson }
-      }
+      const upstreamJson = await metadata.get()
 
       // Preserve upstream issuer/endpoints; only add scopes + (optionally) the static-DCR registration_endpoint.
       const rewritten: Record<string, unknown> = {
@@ -81,8 +57,11 @@ export const mountDiscovery = (app: Express, opts: DiscoveryOptions) => {
       res.setHeader('content-type', 'application/json')
       res.status(200).json(rewritten)
     } catch (err) {
-      failedAt = Date.now()
-      logger.error({ err }, 'failed to fetch upstream issuer metadata')
+      // A 'cooldown' rejection means an earlier fetch already failed and was logged; logging again would
+      // put one line per request in the log for as long as the IdP is down.
+      if (!(err instanceof IssuerMetadataError) || err.reason !== 'cooldown') {
+        logger.error({ err }, 'failed to fetch upstream issuer metadata')
+      }
       res.status(502).json({ error: 'upstream issuer unreachable' })
     }
   })
@@ -91,5 +70,3 @@ export const mountDiscovery = (app: Express, opts: DiscoveryOptions) => {
     res.json({ status: 'ok' })
   })
 }
-
-const ensureTrailingSlash = (url: string): string => (url.endsWith('/') ? url : `${url}/`)
