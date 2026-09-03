@@ -25,6 +25,9 @@ const envSchema = z
     STATIC_CLIENT_SECRET: z.string().optional(),
     MCP_UPSTREAM_PATH: z.string().optional(),
     SCOPES_SUPPORTED: z.string().optional(),
+    // Upper bound on how long a group lookup that admitted a request is reused. Optional, with a
+    // default, so enabling ALLOW_GROUPS against an IdP that needs the lookup requires no new config.
+    GROUP_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   })
   .refine((env) => csv(env.ALLOW_SUBS).length + csv(env.ALLOW_EMAILS).length + csv(env.ALLOW_GROUPS).length > 0, {
     message: 'at least one of ALLOW_SUBS, ALLOW_EMAILS, ALLOW_GROUPS must be set',
@@ -57,6 +60,7 @@ export type Config = {
   staticClientSecret: string | undefined
   mcpUpstreamPath: string | undefined
   scopesSupported: string[] | undefined
+  groupCacheTtlSeconds: number
 }
 
 export const loadConfig = (env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env): Config => {
@@ -88,5 +92,6 @@ export const loadConfig = (env: NodeJS.ProcessEnv | Record<string, string | unde
     staticClientSecret: parsed.STATIC_CLIENT_SECRET,
     mcpUpstreamPath: parsed.MCP_UPSTREAM_PATH,
     scopesSupported: csv(parsed.SCOPES_SUPPORTED).length > 0 ? csv(parsed.SCOPES_SUPPORTED) : undefined,
+    groupCacheTtlSeconds: parsed.GROUP_CACHE_TTL_SECONDS,
   }
 }

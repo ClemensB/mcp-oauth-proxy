@@ -92,4 +92,19 @@ describe('loadConfig', () => {
     const config = loadConfig(baseEnv)
     expect(config.scopesSupported).toBeUndefined()
   })
+
+  it('defaults the group cache TTL to five minutes', () => {
+    // Requirement: enabling ALLOW_GROUPS against an IdP that needs a userinfo lookup must not oblige
+    // an operator to set anything new.
+    expect(loadConfig(baseEnv).groupCacheTtlSeconds).toBe(300)
+  })
+
+  it('parses GROUP_CACHE_TTL_SECONDS', () => {
+    expect(loadConfig({ ...baseEnv, GROUP_CACHE_TTL_SECONDS: '60' }).groupCacheTtlSeconds).toBe(60)
+  })
+
+  it('rejects a zero or negative group cache TTL', () => {
+    expect(() => loadConfig({ ...baseEnv, GROUP_CACHE_TTL_SECONDS: '0' })).toThrow(/GROUP_CACHE_TTL_SECONDS/)
+    expect(() => loadConfig({ ...baseEnv, GROUP_CACHE_TTL_SECONDS: '-30' })).toThrow(/GROUP_CACHE_TTL_SECONDS/)
+  })
 })

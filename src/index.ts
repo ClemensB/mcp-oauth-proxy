@@ -3,6 +3,7 @@ import { loadConfig } from './config.js'
 import { createAuthMiddleware } from './auth-middleware.js'
 import { createCorsMiddleware } from './cors.js'
 import { mountDiscovery } from './discovery.js'
+import { createIssuerMetadataFetcher } from './issuer-metadata.js'
 import { mountProxy } from './proxy.js'
 import { mountRegistration } from './registration.js'
 import { createRateLimiter } from './rate-limit.js'
@@ -23,9 +24,15 @@ const buildApp = (opts: {
   staticClientSecret: string | undefined
   upstreamPath: string | undefined
   scopesSupported?: string[]
+  groupCacheTtlSeconds?: number
 }): Express => {
   const app = express()
   app.disable('x-powered-by')
+
+  // One fetcher for the whole app: the discovery endpoint and the auth middleware's group lookup
+  // both read the issuer's metadata, and sharing it means one cache, one in-flight request and one
+  // negative-cache window between them rather than two independent paths to the IdP.
+  const metadata = createIssuerMetadataFetcher({ issuerUrl: opts.issuerUrl })
 
   // CORS must run before auth so OPTIONS preflights short-circuit cleanly.
   app.use(createCorsMiddleware({ allowOrigins: opts.allowOrigins }))
@@ -61,6 +68,7 @@ const buildApp = (opts: {
   mountDiscovery(app, {
     issuerUrl: opts.issuerUrl,
     resourceUrl: opts.resourceUrl,
+    metadata,
     injectRegistrationEndpoint: Boolean(opts.staticClientId && opts.staticClientSecret),
     ...(opts.scopesSupported !== undefined && { scopesSupported: opts.scopesSupported }),
   })
@@ -82,6 +90,8 @@ const buildApp = (opts: {
     allowSubs: opts.allowSubs,
     allowEmails: opts.allowEmails,
     allowGroups: opts.allowGroups,
+    metadata,
+    ...(opts.groupCacheTtlSeconds !== undefined && { groupCacheTtlMs: opts.groupCacheTtlSeconds * 1000 }),
   })
 
   // No path exemptions here. The public routes (discovery, /healthz, /oauth/register) are all
@@ -137,6 +147,7 @@ const main = async () => {
     staticClientId: config.staticClientId,
     staticClientSecret: config.staticClientSecret,
     upstreamPath: config.mcpUpstreamPath,
+    groupCacheTtlSeconds: config.groupCacheTtlSeconds,
     ...(config.scopesSupported !== undefined && { scopesSupported: config.scopesSupported }),
   })
 
