@@ -39,7 +39,9 @@ describe('createJwtVerifier', () => {
   })
 
   it('refreshes JWKS after key rotation', async () => {
-    const verify = createJwtVerifier({ issuerUrl: oidc.issuerUrl, audience: 'test-aud' })
+    // Explicit short cooldown: the production default (jose's 30s) deliberately rate-limits refetches,
+    // so rotation would not converge inside a test.
+    const verify = createJwtVerifier({ issuerUrl: oidc.issuerUrl, audience: 'test-aud', jwksCooldownMs: 0 })
     const before = await oidc.signToken({ sub: 'user-1' }, { audience: 'test-aud' })
     await verify(before)
 
@@ -47,6 +49,20 @@ describe('createJwtVerifier', () => {
     const after = await oidc.signToken({ sub: 'user-2' }, { audience: 'test-aud' })
     const claims = await verify(after)
     expect(claims.sub).toBe('user-2')
+  })
+
+  it('accepts EdDSA (Ed25519) signed tokens', async () => {
+    // The algorithm allowlist pins asymmetric algs; EdDSA is asymmetric and used by real IdPs —
+    // omitting it silently locks out every user of an Ed25519-signing issuer.
+    const ed = await startOidcFixture('EdDSA')
+    try {
+      const verify = createJwtVerifier({ issuerUrl: ed.issuerUrl, audience: 'test-aud' })
+      const token = await ed.signToken({ sub: 'user-1' }, { audience: 'test-aud' })
+      const claims = await verify(token)
+      expect(claims.sub).toBe('user-1')
+    } finally {
+      await ed.close()
+    }
   })
 
   it('rejects malformed tokens', async () => {

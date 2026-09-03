@@ -11,7 +11,8 @@ export const startMcpUpstream = async (): Promise<McpUpstreamFixture> => {
   let lastHeaders: Record<string, string | string[] | undefined> = {}
   const server: Server = createServer((req, res) => {
     lastHeaders = req.headers
-    if (req.url === '/mcp') {
+    // Route on pathname, as a real server would, so tests can assert on the forwarded query string.
+    if (new URL(req.url ?? '/', 'http://localhost').pathname === '/mcp') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ ok: true, path: req.url, method: req.method }))
       return

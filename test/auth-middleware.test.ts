@@ -78,12 +78,36 @@ describe('createAuthMiddleware', () => {
     expect(res.body.sub).toBe('allowed-user')
   })
 
-  it('passes through a valid token with allowed email', async () => {
-    const token = await oidc.signToken({ sub: 'x', email: 'yann@example.com' }, { audience: 'test-aud' })
+  it('passes through a valid token with allowed, verified email', async () => {
+    const token = await oidc.signToken(
+      { sub: 'x', email: 'yann@example.com', email_verified: true },
+      { audience: 'test-aud' },
+    )
     const res = await supertest(buildApp({ allowSubs: [], allowEmails: ['yann@example.com'] }))
       .get('/protected')
       .set('authorization', `Bearer ${token}`)
     expect(res.status).toBe(200)
+  })
+
+  it('rejects an allow-listed email that is not verified', async () => {
+    for (const claims of [
+      { sub: 'x', email: 'yann@example.com', email_verified: false },
+      { sub: 'x', email: 'yann@example.com' }, // claim absent entirely
+    ]) {
+      const token = await oidc.signToken(claims, { audience: 'test-aud' })
+      const res = await supertest(buildApp({ allowSubs: [], allowEmails: ['yann@example.com'] }))
+        .get('/protected')
+        .set('authorization', `Bearer ${token}`)
+      expect(res.status).toBe(403)
+    }
+  })
+
+  it('rejects a token with no sub claim, even when another allow-list would match', async () => {
+    const token = await oidc.signToken({ groups: ['admin'] }, { audience: 'test-aud' })
+    const res = await supertest(buildApp({ allowSubs: [], allowGroups: ['admin'] }))
+      .get('/protected')
+      .set('authorization', `Bearer ${token}`)
+    expect(res.status).toBe(401)
   })
 
   it('passes through when any one allow-list matches (sub OR email OR group)', async () => {

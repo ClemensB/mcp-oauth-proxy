@@ -94,6 +94,62 @@ describe('mountDiscovery', () => {
     }
   })
 
+  it('coalesces concurrent cold-cache requests into a single upstream fetch', async () => {
+    let hits = 0
+    const upstream = express()
+    upstream.get('/.well-known/openid-configuration', (_req, res) => {
+      hits++
+      // Delay the response so all concurrent proxy requests are in flight while the cache is still cold.
+      setTimeout(() => res.json({ issuer: 'https://idp.example.com', jwks_uri: 'https://idp.example.com/jwks' }), 50)
+    })
+    const server = upstream.listen(0, '127.0.0.1')
+    await new Promise<void>((r) => server.on('listening', r))
+    const port = (server.address() as { port: number }).port
+    try {
+      const app = express()
+      mountDiscovery(app, {
+        issuerUrl: `http://127.0.0.1:${port}/`,
+        resourceUrl: 'https://mcp.example.com',
+        injectRegistrationEndpoint: false,
+      })
+      const results = await Promise.all(
+        Array.from({ length: 5 }, () => supertest(app).get('/.well-known/oauth-authorization-server')),
+      )
+      for (const r of results) expect(r.status).toBe(200)
+      expect(hits).toBe(1)
+    } finally {
+      server.close()
+    }
+  })
+
+  it('negatively caches upstream failures instead of refetching once per hit', async () => {
+    let hits = 0
+    const upstream = express()
+    upstream.get('/.well-known/openid-configuration', (_req, res) => {
+      hits++
+      res.status(502).end()
+    })
+    const server = upstream.listen(0, '127.0.0.1')
+    await new Promise<void>((r) => server.on('listening', r))
+    const port = (server.address() as { port: number }).port
+    try {
+      const app = express()
+      mountDiscovery(app, {
+        issuerUrl: `http://127.0.0.1:${port}/`,
+        resourceUrl: 'https://mcp.example.com',
+        injectRegistrationEndpoint: false,
+      })
+      const first = await supertest(app).get('/.well-known/oauth-authorization-server')
+      expect(first.status).toBe(502)
+      const second = await supertest(app).get('/.well-known/oauth-authorization-server')
+      expect(second.status).toBe(502)
+      // The second hit must be served from the failure cache, not amplified into another IdP request.
+      expect(hits).toBe(1)
+    } finally {
+      server.close()
+    }
+  })
+
   it('uses custom scopes_supported when provided', async () => {
     const app = express()
     mountDiscovery(app, {

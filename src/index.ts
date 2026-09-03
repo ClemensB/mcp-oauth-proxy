@@ -33,6 +33,9 @@ const buildApp = (opts: {
   // Request log — runs before auth so we can see all incoming requests including 401-bound ones.
   app.use((req, res, next) => {
     const start = Date.now()
+    // Captured now, not at 'finish': the proxy strips the Authorization header before forwarding, so
+    // reading it after the response would log every authenticated proxied request as tokenless.
+    const hasAuth = !!req.header('authorization')
     res.on('finish', () => {
       logger.info(
         {
@@ -44,7 +47,10 @@ const buildApp = (opts: {
           ua: req.header('user-agent'),
           contentType: req.header('content-type'),
           accept: req.header('accept'),
-          hasAuth: !!req.header('authorization'),
+          hasAuth,
+          // Populated by the auth middleware before this 'finish' handler runs, so authenticated
+          // requests are attributable in the audit log.
+          sub: (req as express.Request & { auth?: { sub: string } }).auth?.sub,
         },
         'request',
       )
@@ -78,12 +84,16 @@ const buildApp = (opts: {
     allowGroups: opts.allowGroups,
   })
 
+  // No path exemptions here. The public routes (discovery, /healthz, /oauth/register) are all
+  // registered ABOVE this middleware and answer their own requests, so they never reach it. Skipping
+  // auth by path prefix instead would let any other method/path under those prefixes — e.g.
+  // `POST /healthz` or `POST /.well-known/anything` — fall straight through to the catch-all proxy.
   app.use((req, res, next) => {
-    if (req.path.startsWith('/.well-known/') || req.path === '/healthz' || req.path === '/oauth/register') return next()
     auth(req, res, (err) => {
       if (err) return next(err)
-      const sub = (req as express.Request & { auth?: { sub: string } }).auth?.sub
-      if (sub && !limiter.tryConsume(sub)) {
+      // The auth middleware rejects tokens without a usable `sub`, so this is always a real identity.
+      const sub = (req as express.Request & { auth?: { sub: string } }).auth?.sub ?? ''
+      if (!limiter.tryConsume(sub)) {
         res.status(429).json({ error: 'rate limit exceeded' })
         return
       }
