@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.0
+
+Feature release: `ALLOW_GROUPS` now works against issuers whose access tokens carry no `groups` claim. Also raises the Node floor and brings every dependency current.
+
+**Upgrading:** this release requires **Node 22.13 or newer** (previously 20). The published Docker image is built on `node:22-alpine`. Nothing else in the configuration changes; no new variable is required.
+
+- **feat(auth): resolve group membership from the issuer's `userinfo` endpoint.** `ALLOW_GROUPS` matched only against the access token's `groups` claim. Many issuers apply OIDC claim mapping to the ID token alone, and a resource server validates the access token — so the claim never arrived and the option was permanently non-functional while still looking supported. When, and only when, the token carries no `groups` claim, the proxy now asks the issuer with the caller's own token. A token that already carries the claim is taken at its word (empty list included), a request already admitted by `ALLOW_SUBS` or `ALLOW_EMAILS` never triggers a lookup, and neither does anything when `ALLOW_GROUPS` is unset.
+  - The userinfo `sub` must match the token's `sub` (OIDC Core §5.3.2), and the endpoint must be on the issuer's own origin — the proxy will not follow an issuer document to another host while carrying a live access token.
+  - Lookups are cached keyed on a hash of the token rather than on the subject, since two tokens for one person may carry different grants. Entries never outlive the token's `exp`, are bounded by the new `GROUP_CACHE_TTL_SECONDS` (default 300), and a result that did _not_ admit is held for seconds only, so adding someone to a group takes effect promptly.
+  - **A lookup that cannot be completed answers `503` with `Retry-After`, never `403` and never an empty group list.** An unreachable dependency is not the same event as a user who is not a member, and a `403` invites a client to treat a transient IdP blip as bad credentials and demand re-authentication. An absent `groups` claim in an otherwise well-formed response is not a failure: it means membership of nothing, and is a plain `403`.
+- **refactor(discovery): extract the issuer-metadata fetcher.** The cache, in-flight coalescing and negative-cache window added in 0.4.1 were closure state inside `mountDiscovery`. They are now a module that the discovery endpoint and the group lookup share, so the two paths use one cache and one in-flight request between them rather than opening a second route to the IdP.
+- **build: raise the pnpm floor to 11 and the Node floor to 22.** nixpkgs marks the whole pnpm 9 line insecure (seven CVEs). The published artifact was never exposed, but anyone building this fork the documented way got a vulnerable toolchain. pnpm 11 requires Node 22.13+, so the Docker base image, CI and `engines.node` move together. `pnpm-workspace.yaml` declares the one dependency whose install script pnpm 11 would otherwise treat as a hard error.
+- **build(deps): everything current.** `jose` 5 → 6, `http-proxy-3` 1 → 2, `pino` 9 → 10, `zod` 4.4 → 4.5, `vitest` 2 → 4, `typescript` 6 → 7, plus lockfile-only fixes for `body-parser`, `qs` and `form-data`. `pnpm audit` goes from fourteen findings to one dev-only advisory (esbuild under tsx, which tsx still pins below the patched release); the production tree is clean. The runtime bumps landed after the feature so the full suite, not the bump itself, certified them. `@types/node` deliberately stays on the 22 line to match the runtime floor.
+- **chore(nix): add a flake dev shell.** `nix develop` provides node and pnpm at the versions this package targets.
+
+Tests: 72 → 106.
+
 ## 0.4.1
 
 Hardening follow-up to 0.4.0. Availability fixes around the two unauthenticated IdP-fetch paths, plus header-hygiene and audit-log corrections.
