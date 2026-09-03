@@ -62,9 +62,7 @@ pnpm add @allardy/mcp-oauth-proxy
 ```ts
 import { buildApp } from '@allardy/mcp-oauth-proxy'
 
-const app = buildApp({
-  /* ...same shape as env vars... */
-})
+const app = buildApp({/* ...same shape as env vars... */})
 app.listen(8080)
 ```
 
