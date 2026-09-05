@@ -25,9 +25,12 @@ const envSchema = z
     STATIC_CLIENT_SECRET: z.string().optional(),
     MCP_UPSTREAM_PATH: z.string().optional(),
     SCOPES_SUPPORTED: z.string().optional(),
-    // Forwarded to the upstream as X-Wiki-Client on every proxied request, so an upstream that records
-    // provenance can name the client this instance fronts (e.g. `claude.ai`). One instance, one client.
-    CLIENT_LABEL: z.string().min(1).optional(),
+    // Off by default: the proxy forwards nothing about the caller. On, every proxied request carries
+    // X-Forwarded-User (sub), X-Forwarded-Preferred-Username and X-Forwarded-Email when known, and
+    // X-Forwarded-Client when FORWARD_CLIENT_LABEL is set -- the header names oauth2-proxy and
+    // forward-auth setups already use, for an upstream that records provenance.
+    FORWARD_IDENTITY: z.enum(['true', 'false']).default('false'),
+    FORWARD_CLIENT_LABEL: z.string().min(1).optional(),
     // Upper bound on how long a group lookup that admitted a request is reused. Optional, with a
     // default, so enabling ALLOW_GROUPS against an IdP that needs the lookup requires no new config.
     GROUP_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
@@ -62,6 +65,7 @@ export type Config = {
   staticClientId: string | undefined
   staticClientSecret: string | undefined
   mcpUpstreamPath: string | undefined
+  forwardIdentity: boolean
   clientLabel: string | undefined
   scopesSupported: string[] | undefined
   groupCacheTtlSeconds: number
@@ -84,7 +88,8 @@ export const loadConfig = (env: NodeJS.ProcessEnv | Record<string, string | unde
     allowEmails: csv(parsed.ALLOW_EMAILS),
     allowGroups: csv(parsed.ALLOW_GROUPS),
     mcpUpstreamUrl: parsed.MCP_UPSTREAM_URL,
-    clientLabel: parsed.CLIENT_LABEL,
+    forwardIdentity: parsed.FORWARD_IDENTITY === 'true',
+    clientLabel: parsed.FORWARD_CLIENT_LABEL,
     mcpSpawnCmd: parsed.MCP_SPAWN_CMD,
     mcpSpawnPort: parsed.MCP_SPAWN_PORT,
     port: parsed.PORT,

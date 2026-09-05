@@ -2,9 +2,9 @@
 
 ## 0.5.1
 
-Small additive release: the proxy tells the upstream who is asking.
+Small additive release: the proxy can tell the upstream who is asking. Off by default.
 
-- **feat(proxy): identity headers on proxied requests.** Every request forwarded to the MCP upstream now carries `X-Wiki-User-Id` (the verified token's `sub`, always) and, when known, `X-Wiki-User` (`preferred_username` — from the token if it carries one, else from the same `userinfo` answer the group lookup already fetches, cached with it). A new optional `CLIENT_LABEL` is sent as `X-Wiki-Client`, naming the client this instance fronts. Any values for these three headers that the *caller* sent are dropped before the proxy sets its own: only the proxy, having authenticated the request, gets to say who is asking. None of this affects admission; it exists for an upstream that records provenance (e.g. a capture server attributing commits). No new variable is required; without `CLIENT_LABEL` the client header is simply absent.
+- **feat(proxy): optional identity forwarding.** With `FORWARD_IDENTITY=true`, every proxied request carries `X-Forwarded-User` (the verified token's `sub`), and when known `X-Forwarded-Preferred-Username` (from the token, else from the same `userinfo` answer the group lookup already fetches, cached with it) and `X-Forwarded-Email`. `FORWARD_CLIENT_LABEL`, if set, is sent as `X-Forwarded-Client` to name the client this instance fronts. These are the header names oauth2-proxy and forward-auth setups already use. Whether forwarding is on or off, caller-supplied values for these headers are dropped: only the proxy, having authenticated the request, says who is asking. None of this affects admission; it exists for an upstream that records provenance. No new variable is required; the default is unchanged behaviour.
 
 ## 0.5.0
 
