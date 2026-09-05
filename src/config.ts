@@ -25,6 +25,9 @@ const envSchema = z
     STATIC_CLIENT_SECRET: z.string().optional(),
     MCP_UPSTREAM_PATH: z.string().optional(),
     SCOPES_SUPPORTED: z.string().optional(),
+    // Forwarded to the upstream as X-Wiki-Client on every proxied request, so an upstream that records
+    // provenance can name the client this instance fronts (e.g. `claude.ai`). One instance, one client.
+    CLIENT_LABEL: z.string().min(1).optional(),
     // Upper bound on how long a group lookup that admitted a request is reused. Optional, with a
     // default, so enabling ALLOW_GROUPS against an IdP that needs the lookup requires no new config.
     GROUP_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
@@ -59,6 +62,7 @@ export type Config = {
   staticClientId: string | undefined
   staticClientSecret: string | undefined
   mcpUpstreamPath: string | undefined
+  clientLabel: string | undefined
   scopesSupported: string[] | undefined
   groupCacheTtlSeconds: number
 }
@@ -80,6 +84,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv | Record<string, string | unde
     allowEmails: csv(parsed.ALLOW_EMAILS),
     allowGroups: csv(parsed.ALLOW_GROUPS),
     mcpUpstreamUrl: parsed.MCP_UPSTREAM_URL,
+    clientLabel: parsed.CLIENT_LABEL,
     mcpSpawnCmd: parsed.MCP_SPAWN_CMD,
     mcpSpawnPort: parsed.MCP_SPAWN_PORT,
     port: parsed.PORT,

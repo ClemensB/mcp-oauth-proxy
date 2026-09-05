@@ -56,6 +56,46 @@ describe('mcp-oauth-proxy integration', () => {
     expect(res.body).toMatchObject({ ok: true, path: '/mcp', method: 'GET' })
   })
 
+  it('forwards identity headers the proxy sets and drops any the caller sent', async () => {
+    const token = await oidc.signToken({ sub: 'yann', preferred_username: 'yann.h' }, { audience: 'test-aud' })
+    const res = await supertest(app)
+      .get('/mcp')
+      .set('authorization', `Bearer ${token}`)
+      .set('x-wiki-client', 'spoofed-client')
+      .set('x-wiki-user', 'spoofed-user')
+      .set('x-wiki-user-id', 'spoofed-id')
+    expect(res.status).toBe(200)
+    expect(upstream.lastHeaders()['x-wiki-user-id']).toBe('yann')
+    expect(upstream.lastHeaders()['x-wiki-user']).toBe('yann.h')
+    // No CLIENT_LABEL on this app: the header is absent, not the caller's value.
+    expect(upstream.lastHeaders()['x-wiki-client']).toBeUndefined()
+  })
+
+  it('sends CLIENT_LABEL as x-wiki-client when configured', async () => {
+    const labelled = buildApp({
+      issuerUrl: oidc.issuerUrl,
+      audience: 'test-aud',
+      resourceUrl: 'https://mcp.example.com',
+      allowSubs: ['yann'],
+      allowEmails: [],
+      allowGroups: [],
+      upstreamUrl: upstream.url,
+      rateLimitRpm: 600,
+      allowOrigins: [],
+      staticClientId: undefined,
+      staticClientSecret: undefined,
+      upstreamPath: undefined,
+      clientLabel: 'claude.ai',
+    })
+    const token = await oidc.signToken({ sub: 'yann' }, { audience: 'test-aud' })
+    const res = await supertest(labelled).get('/mcp').set('authorization', `Bearer ${token}`)
+    expect(res.status).toBe(200)
+    expect(upstream.lastHeaders()['x-wiki-client']).toBe('claude.ai')
+    // No preferred_username on this token and no lookup ran: no x-wiki-user, but the id is always there.
+    expect(upstream.lastHeaders()['x-wiki-user']).toBeUndefined()
+    expect(upstream.lastHeaders()['x-wiki-user-id']).toBe('yann')
+  })
+
   it('rejects authenticated requests for non-allowed users', async () => {
     const token = await oidc.signToken({ sub: 'someone-else' }, { audience: 'test-aud' })
     const res = await supertest(app).get('/mcp').set('authorization', `Bearer ${token}`)

@@ -26,6 +26,9 @@ type AuthedRequest = Request & {
     sub: string
     email: string | undefined
     groups: string[]
+    // From the token's `preferred_username` when it carries one, else from userinfo when a group
+    // lookup ran. Provenance for the upstream, never a basis for admission.
+    username?: string
   }
 }
 
@@ -77,6 +80,8 @@ export const createAuthMiddleware = (opts: AuthMiddlewareOptions): RequestHandle
     }
 
     const sub = typeof claims.sub === 'string' ? claims.sub.trim() : ''
+    const pu = claims['preferred_username']
+    const tokenUsername = typeof pu === 'string' && pu.trim() !== '' ? pu.trim() : undefined
     // A token with no usable `sub` is rejected outright: it can't be allow-listed by subject, can't be
     // attributed in the audit log, and can't be rate-limited (the limiter is keyed on `sub`).
     if (!sub) {
@@ -101,7 +106,7 @@ export const createAuthMiddleware = (opts: AuthMiddlewareOptions): RequestHandle
     }
 
     if (subOk || emailOk || groupOk) {
-      req.auth = { sub, email, groups }
+      req.auth = { sub, email, groups, ...(tokenUsername && { username: tokenUsername }) }
       next()
       return
     }
@@ -113,12 +118,15 @@ export const createAuthMiddleware = (opts: AuthMiddlewareOptions): RequestHandle
     // so this costs nothing on issuers that populate it.
     if (groupLookup && claims['groups'] === undefined) {
       let resolved: string[]
+      let lookedUpUsername: string | undefined
       try {
-        resolved = await groupLookup.groupsFor({
+        const result = await groupLookup.groupsFor({
           token,
           sub,
           ...(typeof claims.exp === 'number' && { exp: claims.exp }),
         })
+        resolved = result.groups
+        lookedUpUsername = result.username
       } catch (err) {
         // 503, not 403. An unreachable dependency is not the same event as a user who is not a member,
         // and answering 403 risks a client marking the connector unauthorized and demanding re-auth
@@ -132,7 +140,8 @@ export const createAuthMiddleware = (opts: AuthMiddlewareOptions): RequestHandle
       }
 
       if (resolved.some((g) => opts.allowGroups.includes(g))) {
-        req.auth = { sub, email, groups: resolved }
+        const username = tokenUsername ?? lookedUpUsername
+        req.auth = { sub, email, groups: resolved, ...(username && { username }) }
         next()
         return
       }

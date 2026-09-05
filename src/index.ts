@@ -23,6 +23,7 @@ const buildApp = (opts: {
   staticClientId: string | undefined
   staticClientSecret: string | undefined
   upstreamPath: string | undefined
+  clientLabel?: string | undefined
   scopesSupported?: string[]
   groupCacheTtlSeconds?: number
 }): Express => {
@@ -111,7 +112,7 @@ const buildApp = (opts: {
     })
   })
 
-  mountProxy(app, { upstreamUrl: opts.upstreamUrl, upstreamPath: opts.upstreamPath })
+  mountProxy(app, { upstreamUrl: opts.upstreamUrl, upstreamPath: opts.upstreamPath, clientLabel: opts.clientLabel })
 
   return app
 }
@@ -147,6 +148,7 @@ const main = async () => {
     staticClientId: config.staticClientId,
     staticClientSecret: config.staticClientSecret,
     upstreamPath: config.mcpUpstreamPath,
+    clientLabel: config.clientLabel,
     groupCacheTtlSeconds: config.groupCacheTtlSeconds,
     ...(config.scopesSupported !== undefined && { scopesSupported: config.scopesSupported }),
   })

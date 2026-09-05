@@ -58,8 +58,15 @@ export type GroupLookupInput = {
   exp?: number
 }
 
+export type GroupLookupResult = {
+  groups: string[]
+  // `preferred_username` from the same userinfo answer, when the issuer sends one. Carried to the
+  // upstream as X-Wiki-User; nothing here decides admission on it.
+  username?: string
+}
+
 export type GroupLookup = {
-  groupsFor: (input: GroupLookupInput) => Promise<string[]>
+  groupsFor: (input: GroupLookupInput) => Promise<GroupLookupResult>
 }
 
 const MAX_CACHE_TTL_MS = 300_000
@@ -78,9 +85,9 @@ export const createGroupLookup = (opts: GroupLookupOptions): GroupLookup => {
   // Keyed on a hash of the token, never the token itself: two tokens for one person may carry
   // different grants, so the subject is the wrong key (a narrowly-scoped token would inherit a
   // broadly-scoped one's answer), and holding raw credentials in a long-lived map is worth avoiding.
-  const cache = new Map<string, { groups: string[]; expiresAt: number }>()
+  const cache = new Map<string, { result: GroupLookupResult; expiresAt: number }>()
 
-  const remember = (key: string, groups: string[], admitted: boolean, exp: number | undefined) => {
+  const remember = (key: string, result: GroupLookupResult, admitted: boolean, exp: number | undefined) => {
     // The cache must never outlive the token it describes. Beyond that, an admitting answer is held
     // for the full window while a non-admitting one is held barely at all: someone just added to a
     // group should not have to wait out a cache to get in, whereas someone just removed is bounded by
@@ -98,7 +105,7 @@ export const createGroupLookup = (opts: GroupLookupOptions): GroupLookup => {
         if (!oldest.done) cache.delete(oldest.value)
       }
     }
-    cache.set(key, { groups, expiresAt })
+    cache.set(key, { result, expiresAt })
   }
 
   const userinfoUrl = async (): Promise<URL> => {
@@ -127,7 +134,7 @@ export const createGroupLookup = (opts: GroupLookupOptions): GroupLookup => {
     return url
   }
 
-  const fetchGroups = async (url: URL, token: string, sub: string): Promise<string[]> => {
+  const fetchGroups = async (url: URL, token: string, sub: string): Promise<GroupLookupResult> => {
     let res: Response
     try {
       res = await fetch(url, {
@@ -165,35 +172,38 @@ export const createGroupLookup = (opts: GroupLookupOptions): GroupLookup => {
       throw new GroupLookupError('subject-mismatch', 'userinfo sub does not match the token sub')
     }
 
+    const pu = claims['preferred_username']
+    const username = typeof pu === 'string' && pu.trim() !== '' ? pu.trim() : undefined
+
     const raw = claims['groups']
     // Absent is not malformed: an issuer whose claim mapping produces nothing for a user in no mapped
     // groups simply omits the claim. Treating that as an error would turn the ordinary "removed from
     // the group" case into a 503 that reads like an outage, when it is a plain, correct refusal.
-    if (raw === undefined || raw === null) return []
+    if (raw === undefined || raw === null) return { groups: [], ...(username && { username }) }
     if (!Array.isArray(raw) || raw.some((g) => typeof g !== 'string')) {
       // A present-but-wrong shape is different: a `groups` claim joined into a single space-separated
       // string would otherwise silently read as "member of nothing".
       throw new GroupLookupError('malformed', 'userinfo groups claim is not an array of strings')
     }
-    return raw as string[]
+    return { groups: raw as string[], ...(username && { username }) }
   }
 
   return {
     groupsFor: async ({ token, sub, exp }) => {
       const key = createHash('sha256').update(token).digest('hex')
       const hit = cache.get(key)
-      if (hit && hit.expiresAt > now()) return hit.groups
+      if (hit && hit.expiresAt > now()) return hit.result
       if (hit) cache.delete(key)
 
       const url = await userinfoUrl()
-      const groups = await fetchGroups(url, token, sub)
+      const result = await fetchGroups(url, token, sub)
       remember(
         key,
-        groups,
-        groups.some((g) => opts.allowGroups.includes(g)),
+        result,
+        result.groups.some((g) => opts.allowGroups.includes(g)),
         exp,
       )
-      return groups
+      return result
     },
   }
 }

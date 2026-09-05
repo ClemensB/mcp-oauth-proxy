@@ -18,6 +18,11 @@ describe('loadConfig', () => {
     expect(config.rateLimitRpm).toBe(60)
   })
 
+  it('carries CLIENT_LABEL through as clientLabel, absent when unset', () => {
+    expect(loadConfig({ ...baseEnv }).clientLabel).toBeUndefined()
+    expect(loadConfig({ ...baseEnv, CLIENT_LABEL: 'claude.ai' }).clientLabel).toBe('claude.ai')
+  })
+
   it('parses comma-separated allow-lists', () => {
     const config = loadConfig({ ...baseEnv, ALLOW_SUBS: 'a,b,c', ALLOW_EMAILS: 'x@y.com' })
     expect(config.allowSubs).toEqual(['a', 'b', 'c'])

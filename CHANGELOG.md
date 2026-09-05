@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+Small additive release: the proxy tells the upstream who is asking.
+
+- **feat(proxy): identity headers on proxied requests.** Every request forwarded to the MCP upstream now carries `X-Wiki-User-Id` (the verified token's `sub`, always) and, when known, `X-Wiki-User` (`preferred_username` — from the token if it carries one, else from the same `userinfo` answer the group lookup already fetches, cached with it). A new optional `CLIENT_LABEL` is sent as `X-Wiki-Client`, naming the client this instance fronts. Any values for these three headers that the *caller* sent are dropped before the proxy sets its own: only the proxy, having authenticated the request, gets to say who is asking. None of this affects admission; it exists for an upstream that records provenance (e.g. a capture server attributing commits). No new variable is required; without `CLIENT_LABEL` the client header is simply absent.
+
 ## 0.5.0
 
 Feature release: `ALLOW_GROUPS` now works against issuers whose access tokens carry no `groups` claim. Also raises the Node floor and brings every dependency current.
