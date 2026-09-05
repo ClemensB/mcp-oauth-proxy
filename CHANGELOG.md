@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+Small additive release: the proxy can tell the upstream who is asking. Off by default.
+
+- **feat(proxy): optional identity forwarding.** With `FORWARD_IDENTITY=true`, every proxied request carries `X-Forwarded-User` (the verified token's `sub`), and when known `X-Forwarded-Preferred-Username` (from the token, else from the same `userinfo` answer the group lookup already fetches, cached with it) and `X-Forwarded-Email`. `FORWARD_CLIENT_LABEL`, if set, is sent as `X-Forwarded-Client` to name the client this instance fronts. These are the header names oauth2-proxy and forward-auth setups already use. Whether forwarding is on or off, caller-supplied values for these headers are dropped: only the proxy, having authenticated the request, says who is asking. None of this affects admission; it exists for an upstream that records provenance. No new variable is required; the default is unchanged behaviour.
+
 ## 0.5.0
 
 Feature release: `ALLOW_GROUPS` now works against issuers whose access tokens carry no `groups` claim. Also raises the Node floor and brings every dependency current.

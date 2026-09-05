@@ -56,6 +56,48 @@ describe('mcp-oauth-proxy integration', () => {
     expect(res.body).toMatchObject({ ok: true, path: '/mcp', method: 'GET' })
   })
 
+  it('strips caller-supplied identity headers and forwards none by default', async () => {
+    const token = await oidc.signToken({ sub: 'yann', preferred_username: 'yann.h' }, { audience: 'test-aud' })
+    const res = await supertest(app)
+      .get('/mcp')
+      .set('authorization', `Bearer ${token}`)
+      .set('x-forwarded-user', 'spoofed')
+      .set('x-forwarded-preferred-username', 'spoofed')
+      .set('x-forwarded-email', 'spoofed@example.com')
+      .set('x-forwarded-client', 'spoofed-client')
+    expect(res.status).toBe(200)
+    for (const h of ['x-forwarded-user', 'x-forwarded-preferred-username', 'x-forwarded-email', 'x-forwarded-client']) {
+      expect(upstream.lastHeaders()[h]).toBeUndefined()
+    }
+  })
+
+  it('forwards identity headers when FORWARD_IDENTITY is on, with the label', async () => {
+    const forwarding = buildApp({
+      issuerUrl: oidc.issuerUrl,
+      audience: 'test-aud',
+      resourceUrl: 'https://mcp.example.com',
+      allowSubs: ['yann'],
+      allowEmails: [],
+      allowGroups: [],
+      upstreamUrl: upstream.url,
+      rateLimitRpm: 600,
+      allowOrigins: [],
+      staticClientId: undefined,
+      staticClientSecret: undefined,
+      upstreamPath: undefined,
+      forwardIdentity: true,
+      clientLabel: 'claude.ai',
+    })
+    const token = await oidc.signToken({ sub: 'yann', preferred_username: 'yann.h' }, { audience: 'test-aud' })
+    const res = await supertest(forwarding).get('/mcp').set('authorization', `Bearer ${token}`).set('x-forwarded-user', 'spoofed')
+    expect(res.status).toBe(200)
+    expect(upstream.lastHeaders()['x-forwarded-user']).toBe('yann')
+    expect(upstream.lastHeaders()['x-forwarded-preferred-username']).toBe('yann.h')
+    expect(upstream.lastHeaders()['x-forwarded-client']).toBe('claude.ai')
+    // No email on this token: absent rather than empty.
+    expect(upstream.lastHeaders()['x-forwarded-email']).toBeUndefined()
+  })
+
   it('rejects authenticated requests for non-allowed users', async () => {
     const token = await oidc.signToken({ sub: 'someone-else' }, { audience: 'test-aud' })
     const res = await supertest(app).get('/mcp').set('authorization', `Bearer ${token}`)

@@ -40,7 +40,7 @@ describe('createGroupLookup', () => {
   it('reads the groups claim from userinfo, authenticating as the caller', async () => {
     const token = await tokenFor('member')
     const before = oidc.userinfoCalls()
-    await expect(build().groupsFor({ token, sub: 'member' })).resolves.toEqual(['wiki-users', 'other'])
+    await expect(build().groupsFor({ token, sub: 'member' })).resolves.toMatchObject({ groups: ['wiki-users', 'other'] })
     expect(oidc.userinfoCalls()).toBe(before + 1)
     expect(oidc.lastUserinfoAuthorization()).toBe(`Bearer ${token}`)
   })
@@ -100,10 +100,10 @@ describe('createGroupLookup', () => {
     // Someone just added to a group should not have to wait out a cache to gain access.
     const lookup = build({ maxCacheTtlMs: 300_000, negativeCacheTtlMs: 5_000 })
     const token = await tokenFor('outsider')
-    await expect(lookup.groupsFor({ token, sub: 'outsider' })).resolves.toEqual(['unrelated'])
+    await expect(lookup.groupsFor({ token, sub: 'outsider' })).resolves.toMatchObject({ groups: ['unrelated'] })
     clock += 6_000
     oidc.setGroups('outsider', ['unrelated', 'wiki-users'])
-    await expect(lookup.groupsFor({ token, sub: 'outsider' })).resolves.toEqual(['unrelated', 'wiki-users'])
+    await expect(lookup.groupsFor({ token, sub: 'outsider' })).resolves.toMatchObject({ groups: ['unrelated', 'wiki-users'] })
     oidc.setGroups('outsider', ['unrelated'])
   })
 
@@ -112,7 +112,7 @@ describe('createGroupLookup', () => {
     // would turn the ordinary "removed from the group" case into something that reads like an outage.
     oidc.setUserinfoMode('absent-groups')
     const token = await tokenFor('member')
-    await expect(build().groupsFor({ token, sub: 'member' })).resolves.toEqual([])
+    await expect(build().groupsFor({ token, sub: 'member' })).resolves.toMatchObject({ groups: [] })
   })
 
   it('refuses a userinfo_endpoint that is not on the issuer origin', async () => {

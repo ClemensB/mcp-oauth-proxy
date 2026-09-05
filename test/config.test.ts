@@ -18,6 +18,15 @@ describe('loadConfig', () => {
     expect(config.rateLimitRpm).toBe(60)
   })
 
+  it('identity forwarding is off unless FORWARD_IDENTITY=true; the label rides under it', () => {
+    const off = loadConfig({ ...baseEnv })
+    expect(off.forwardIdentity).toBe(false)
+    expect(off.clientLabel).toBeUndefined()
+    const on = loadConfig({ ...baseEnv, FORWARD_IDENTITY: 'true', FORWARD_CLIENT_LABEL: 'claude.ai' })
+    expect(on.forwardIdentity).toBe(true)
+    expect(on.clientLabel).toBe('claude.ai')
+  })
+
   it('parses comma-separated allow-lists', () => {
     const config = loadConfig({ ...baseEnv, ALLOW_SUBS: 'a,b,c', ALLOW_EMAILS: 'x@y.com' })
     expect(config.allowSubs).toEqual(['a', 'b', 'c'])
