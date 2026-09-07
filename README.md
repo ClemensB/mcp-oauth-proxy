@@ -95,6 +95,7 @@ app.listen(8080)
 | `MCP_UPSTREAM_PATH`       | no           | Optional path on the upstream. All non-discovery, non-healthz, non-oauth-register requests are forwarded to `${MCP_UPSTREAM_URL}${MCP_UPSTREAM_PATH}` (or the spawned upstream URL). Use when the upstream MCP listens at a sub-path like `/mcp` but the proxy is exposed at `/`. |
 | `SCOPES_SUPPORTED`        | no           | Comma-separated list of OAuth scopes the resource server supports. Advertised in both the protected-resource and auth-server discovery docs. Defaults to `openid,profile,email,offline_access`.                                                                                   |
 | `GROUP_CACHE_TTL_SECONDS` | no           | How long a userinfo group lookup that admitted a request is reused. Bounded by the token's own `exp`. Default 300.                                                                                                                                                                |
+| `FORWARD_IDENTITY`        | no           | `true` to tell the upstream who is asking: `X-Forwarded-User` (the verified `sub`), plus `X-Forwarded-Preferred-Username` and `X-Forwarded-Email` when known. The caller's own values for these are always dropped. `X-Forwarded-Client` is the exception — see [Identity forwarding](#identity-forwarding). Default `false`.                |
 
 ## Working with OIDC providers that don't support DCR
 
@@ -117,6 +118,31 @@ The upstream provider's redirect_uri whitelist still governs which callbacks are
 > **Understand what this endpoint gives away.** It publishes your OIDC `client_secret` to anyone who can reach the proxy. The redirect_uri whitelist contains that only for the authorization-code flow, where the secret alone gets an attacker nowhere. It does **not** help if the same upstream client also permits a grant that involves no redirect — `client_credentials` or resource-owner password — because those can be driven with the secret directly against the token endpoint. If you enable static DCR, restrict the upstream client to `authorization_code` (plus `refresh_token`) and nothing else. Better still, if your provider supports a public client with PKCE and no secret at all, use that and leave `STATIC_CLIENT_SECRET` unset.
 
 **Note on the issuer value:** The proxy serves `/.well-known/oauth-authorization-server` from its own URL but preserves the upstream IdP's `issuer` value verbatim, because tokens are signed by the upstream and carry the upstream's `iss` claim — clients that check the token's `iss` against the metadata's `issuer` need the two to match. This technically violates RFC 8414 §3.3, which requires `issuer` to match the URL the metadata was fetched from; a strict client would reject it. Claude.ai tolerates it today. See the comment in `src/discovery.ts` for what a stricter client would force (proxying the token endpoint and re-signing).
+
+## Identity forwarding
+
+With `FORWARD_IDENTITY=true` the proxy tells the upstream who is behind the token, using the header
+names oauth2-proxy and forward-auth setups already use. None of it affects admission; it exists for
+an upstream that records provenance.
+
+The four headers split into two kinds, and the difference is the point:
+
+- **`X-Forwarded-User`, `X-Forwarded-Preferred-Username`, `X-Forwarded-Email`** say *who*. The proxy
+  sets them from the validated token and drops whatever the caller sent, whether forwarding is on or
+  off. The caller is never a source for these.
+- **`X-Forwarded-Client`** says *what program*. The proxy cannot know that — one endpoint can front
+  several clients, and the token is identical whichever obtained it — so the **client declares it**
+  and the proxy forwards what it declared. A caller that sends none gets none: no value is guessed.
+
+That makes the client label self-declared, and it is therefore a label and never a credential.
+Nothing in the proxy admits, denies or branches on it, and an upstream that did would be trusting
+the caller. A compromised session can declare anything; the cost is bounded to a wrong provenance
+label.
+
+Declared labels must match `^[a-z0-9][a-z0-9._-]{0,31}$`. Anything else — a space, an angle bracket,
+a control character, two copies of the header — is **dropped rather than repaired**, because an
+upstream typically records this value verbatim and a partially cleaned value is still a value
+someone else chose.
 
 ## Group membership
 
