@@ -39,6 +39,23 @@ describe('mcp-oauth-proxy integration', () => {
     expect(res.body.resource).toBe('https://mcp.example.com')
   })
 
+  const buildForwardingApp = () =>
+    buildApp({
+      issuerUrl: oidc.issuerUrl,
+      audience: 'test-aud',
+      resourceUrl: 'https://mcp.example.com',
+      allowSubs: ['yann'],
+      allowEmails: [],
+      allowGroups: [],
+      upstreamUrl: upstream.url,
+      rateLimitRpm: 600,
+      allowOrigins: [],
+      staticClientId: undefined,
+      staticClientSecret: undefined,
+      upstreamPath: undefined,
+      forwardIdentity: true,
+    })
+
   it('serves /healthz without auth', async () => {
     const res = await supertest(app).get('/healthz')
     expect(res.status).toBe(200)
@@ -71,31 +88,55 @@ describe('mcp-oauth-proxy integration', () => {
     }
   })
 
-  it('forwards identity headers when FORWARD_IDENTITY is on, with the label', async () => {
-    const forwarding = buildApp({
-      issuerUrl: oidc.issuerUrl,
-      audience: 'test-aud',
-      resourceUrl: 'https://mcp.example.com',
-      allowSubs: ['yann'],
-      allowEmails: [],
-      allowGroups: [],
-      upstreamUrl: upstream.url,
-      rateLimitRpm: 600,
-      allowOrigins: [],
-      staticClientId: undefined,
-      staticClientSecret: undefined,
-      upstreamPath: undefined,
-      forwardIdentity: true,
-      clientLabel: 'claude.ai',
-    })
+  it('forwards identity headers when FORWARD_IDENTITY is on, and the caller-declared label with them', async () => {
+    const forwarding = buildForwardingApp()
     const token = await oidc.signToken({ sub: 'yann', preferred_username: 'yann.h' }, { audience: 'test-aud' })
-    const res = await supertest(forwarding).get('/mcp').set('authorization', `Bearer ${token}`).set('x-forwarded-user', 'spoofed')
+    const res = await supertest(forwarding)
+      .get('/mcp')
+      .set('authorization', `Bearer ${token}`)
+      .set('x-forwarded-user', 'spoofed')
+      .set('x-forwarded-client', 'claude-code')
     expect(res.status).toBe(200)
     expect(upstream.lastHeaders()['x-forwarded-user']).toBe('yann')
     expect(upstream.lastHeaders()['x-forwarded-preferred-username']).toBe('yann.h')
-    expect(upstream.lastHeaders()['x-forwarded-client']).toBe('claude.ai')
+    // The one header the caller *is* the source of: what it declared, not what this proxy decided.
+    expect(upstream.lastHeaders()['x-forwarded-client']).toBe('claude-code')
     // No email on this token: absent rather than empty.
     expect(upstream.lastHeaders()['x-forwarded-email']).toBeUndefined()
+  })
+
+  it('sends no client label when the caller declares none', async () => {
+    const forwarding = buildForwardingApp()
+    const token = await oidc.signToken({ sub: 'yann' }, { audience: 'test-aud' })
+    const res = await supertest(forwarding).get('/mcp').set('authorization', `Bearer ${token}`)
+    expect(res.status).toBe(200)
+    // Absent, not guessed: the upstream's own default for a missing header is what should apply.
+    expect(upstream.lastHeaders()['x-forwarded-client']).toBeUndefined()
+  })
+
+  it('drops a malformed client label rather than cleaning it', async () => {
+    const forwarding = buildForwardingApp()
+    const token = await oidc.signToken({ sub: 'yann' }, { audience: 'test-aud' })
+    // Each of these is recorded verbatim by the upstream (a git author line, there): a space, an
+    // angle bracket, an uppercase letter outside the pattern, and one over the length cap.
+    for (const bad of ['claude code', 'a <b@c>', 'Claude-Code', 'x'.repeat(33)]) {
+      const res = await supertest(forwarding).get('/mcp').set('authorization', `Bearer ${token}`).set('x-forwarded-client', bad)
+      expect(res.status).toBe(200)
+      expect(upstream.lastHeaders()['x-forwarded-client']).toBeUndefined()
+    }
+  })
+
+  it('drops the client label when the caller sends two of them', async () => {
+    const forwarding = buildForwardingApp()
+    const token = await oidc.signToken({ sub: 'yann' }, { audience: 'test-aud' })
+    const res = await supertest(forwarding)
+      .get('/mcp')
+      .set('authorization', `Bearer ${token}`)
+      // Node joins these with ", ", which the pattern rejects -- so the upstream sees neither value
+      // rather than a concatenation of both.
+      .set('x-forwarded-client', ['claude-code', 'claude.ai'])
+    expect(res.status).toBe(200)
+    expect(upstream.lastHeaders()['x-forwarded-client']).toBeUndefined()
   })
 
   it('rejects authenticated requests for non-allowed users', async () => {

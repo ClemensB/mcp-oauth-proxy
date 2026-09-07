@@ -8,15 +8,32 @@ export type ProxyOptions = {
   upstreamPath: string | undefined
   // When true, identity headers are set on every proxied request (see below). Default false.
   forwardIdentity?: boolean | undefined
-  // Sent as X-Forwarded-Client when forwardIdentity is on and this is set.
-  clientLabel?: string | undefined
 }
 
 type AuthedRequest = Request & { auth?: { sub: string; email?: string | undefined; username?: string | undefined } }
 
 // The de-facto forward-auth convention (oauth2-proxy, Traefik ForwardAuth), not anything specific to
-// one deployment. Always stripped from the caller; set only when the operator turned forwarding on.
-const IDENTITY_HEADERS = ['x-forwarded-user', 'x-forwarded-preferred-username', 'x-forwarded-email', 'x-forwarded-client'] as const
+// one deployment.
+//
+// These three say *who*. They are always stripped from the caller and set only from the validated
+// token: the caller is never a source for them.
+const USER_HEADERS = ['x-forwarded-user', 'x-forwarded-preferred-username', 'x-forwarded-email'] as const
+
+// This one says *what program*, and the proxy cannot know it -- one endpoint fronts every surface,
+// and the token is identical whichever client obtained it. So the client declares it and the proxy
+// forwards what it declared, rather than stamping a value from its own config.
+//
+// It is a label, never a credential: nothing here admits, denies or branches on it, and an upstream
+// that did would be trusting the caller. A compromised session can declare anything, which costs a
+// wrong provenance label and nothing else.
+const CLIENT_HEADER = 'x-forwarded-client'
+
+// Deliberately narrow, and a failure drops the header rather than repairing it. The upstream records
+// this value verbatim -- in the deployment this was written for, into a git author line -- so a CR,
+// an angle bracket or a space is a header-injection attempt, and a partially cleaned value is still
+// a value someone else chose. `unknown` (the upstream's own default for an absent header) is the
+// honest answer instead.
+const CLIENT_LABEL = /^[a-z0-9][a-z0-9._-]{0,31}$/
 
 export const mountProxy = (app: Express, opts: ProxyOptions) => {
   const proxy = httpProxy.createProxyServer({
@@ -46,9 +63,13 @@ export const mountProxy = (app: Express, opts: ProxyOptions) => {
     delete req.headers['proxy-authorization']
     delete req.headers['cookie']
 
-    // The caller's own values for the identity headers are dropped whether or not forwarding is on:
+    // The caller's own values for the *who* headers are dropped whether or not forwarding is on:
     // only this proxy, having authenticated the request, gets to say who is asking.
-    for (const h of IDENTITY_HEADERS) delete req.headers[h]
+    for (const h of USER_HEADERS) delete req.headers[h]
+
+    const declared = req.headers[CLIENT_HEADER]
+    delete req.headers[CLIENT_HEADER]
+
     if (opts.forwardIdentity) {
       const auth = (req as AuthedRequest).auth
       if (auth) {
@@ -56,7 +77,9 @@ export const mountProxy = (app: Express, opts: ProxyOptions) => {
         if (auth.username) req.headers['x-forwarded-preferred-username'] = auth.username
         if (auth.email) req.headers['x-forwarded-email'] = auth.email
       }
-      if (opts.clientLabel) req.headers['x-forwarded-client'] = opts.clientLabel
+      // Node joins duplicate headers with ", ", which the pattern rejects -- so two of these is the
+      // same as one malformed one, and neither reaches the upstream.
+      if (typeof declared === 'string' && CLIENT_LABEL.test(declared)) req.headers[CLIENT_HEADER] = declared
     }
 
     if (opts.upstreamPath) {

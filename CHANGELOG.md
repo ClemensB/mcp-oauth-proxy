@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0
+
+The client, not the proxy, says which client it is. One breaking config change.
+
+**Upgrading:** `FORWARD_CLIENT_LABEL` is **removed**. An instance that set it was stamping every request with a fixed label; that value now comes from the caller's own `X-Forwarded-Client` header, and a caller that sends none produces no header at all rather than a default. Deployments that ran one proxy instance per client, purely to carry a distinguishing label, can collapse to one. Nothing else changes; `FORWARD_IDENTITY` keeps its meaning and its default.
+
+- **feat(proxy): `X-Forwarded-Client` is declared by the client and forwarded, not stamped by the proxy.** The proxy fronts an endpoint, not a program: where one deployment serves several clients, the token is identical whichever obtained it, and a stateless upstream cannot recover the client from the MCP `initialize` handshake either. So the one header that names the *program* is now the caller's to set, while the three that name the *person* stay exactly as they were — set from the validated token, and stripped from the caller whether forwarding is on or off.
+  - This makes the label self-declared, so it is a label and never a credential: nothing in the proxy admits, denies or branches on it, and an upstream that did would be trusting the caller. A compromised session can declare anything, which costs a wrong provenance label and nothing else.
+  - Declared labels must match `^[a-z0-9][a-z0-9._-]{0,31}$`, and a value that does not is **dropped rather than cleaned**. An upstream that records provenance tends to record it verbatim — into a git author line, in the deployment this was written for — where a CR or an angle bracket is a header-injection attempt; a partially cleaned value is still a value someone else chose. Duplicate headers fail the same test, since Node joins them with `, `.
+  - Absent and malformed both yield no header, leaving the upstream's own default (`unknown`, typically) to apply. That keeps "did not say" distinguishable from any label a client could pick.
+- **docs(readme): document identity forwarding.** `FORWARD_IDENTITY` was introduced in 0.5.1 and never reached the configuration table; it is there now, with a section on the who/what split above.
+
+Tests: 106 → 112.
+
 ## 0.5.1
 
 Small additive release: the proxy can tell the upstream who is asking. Off by default.
