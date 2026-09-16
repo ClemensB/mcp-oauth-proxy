@@ -24,11 +24,22 @@ export type GroupLookupFailure =
 
 export class GroupLookupError extends Error {
   readonly reason: GroupLookupFailure
+  // The HTTP status userinfo answered with, set only for reason 'status'.
+  readonly status?: number
 
-  constructor(reason: GroupLookupFailure, message: string) {
+  constructor(reason: GroupLookupFailure, message: string, status?: number) {
     super(message)
     this.name = 'GroupLookupError'
     this.reason = reason
+    if (status !== undefined) this.status = status
+  }
+
+  // The issuer rejected the token itself — typically the session behind it has ended or been revoked,
+  // which a locally verified JWT cannot show. RFC 6750 gives a resource server exactly 401 and 403 for
+  // that. Other 4xx (400, 404) point at this proxy's configuration instead, and re-auth would not fix
+  // them.
+  get tokenRejected(): boolean {
+    return this.reason === 'status' && (this.status === 401 || this.status === 403)
   }
 }
 
@@ -151,7 +162,7 @@ export const createGroupLookup = (opts: GroupLookupOptions): GroupLookup => {
       throw new GroupLookupError(reason, `userinfo request failed (${name || 'error'})`)
     }
     // Status only — a body from a failed userinfo call is issuer-controlled and never logged.
-    if (!res.ok) throw new GroupLookupError('status', `userinfo returned ${res.status}`)
+    if (!res.ok) throw new GroupLookupError('status', `userinfo returned ${res.status}`, res.status)
 
     let body: unknown
     try {

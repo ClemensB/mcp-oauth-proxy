@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1
+
+A fix to the group lookup's refusal codes. No configuration change.
+
+- **fix(auth): a token the issuer rejects during the group lookup answers `401 invalid_token`, not `503`.** A token can verify locally and still be dead: the issuer has ended or revoked the session behind it, which only an issuer endpoint can show. Measured on Kanidm, `/userinfo` answers `401` for such a token while its signature and `exp` are still good. 0.5.0 answered every failed lookup `503` with `Retry-After`, so a client holding the dead token was never told to sign in again and retried indefinitely — a Claude.ai connector stayed unusable until reconnected by hand. A `401` or `403` from `userinfo` now gets the same answer as a token that fails verification: `401` with `WWW-Authenticate: Bearer … error="invalid_token"`, logged at `warn`, never cached.
+  - Every other failure keeps `503` + `Retry-After`: timeouts, network errors, 5xx, unreadable answers, and **other 4xx** — a `400` or `404` from `userinfo` points at this proxy's configuration, and telling the client to re-authenticate would only loop.
+  - `403` for a completed lookup that finds no allow-listed group is unchanged.
+
+Tests: 112 → 116.
+
 ## 0.6.0
 
 The client, not the proxy, says which client it is. One breaking config change.

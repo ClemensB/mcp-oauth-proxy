@@ -7,7 +7,10 @@ import { decodeJwt, exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
 export type UserinfoMode =
   | 'ok'
   | 'absent-groups' // 200, but no groups claim at all — a user in no mapped groups
-  | 'unauthorized' // 401
+  | 'unauthorized' // 401 — the issuer rejects the token, e.g. its session was revoked
+  | 'forbidden' // 403
+  | 'bad-request' // 400
+  | 'not-found' // 404
   | 'server-error' // 500
   | 'not-json' // 200 with a body that is not JSON, e.g. a signed (JWT) userinfo response
   | 'not-object' // 200 with a JSON array
@@ -85,8 +88,9 @@ export const startOidcFixture = async (alg = 'RS256'): Promise<OidcFixture> => {
         res.end(JSON.stringify({ error: 'invalid_token' }))
         return
       }
-      if (mode === 'unauthorized' || mode === 'server-error') {
-        res.writeHead(mode === 'unauthorized' ? 401 : 500, { 'content-type': 'application/json' })
+      const failStatus = { unauthorized: 401, forbidden: 403, 'bad-request': 400, 'not-found': 404, 'server-error': 500 }
+      if (mode in failStatus) {
+        res.writeHead(failStatus[mode as keyof typeof failStatus], { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: 'nope' }))
         return
       }

@@ -128,10 +128,21 @@ export const createAuthMiddleware = (opts: AuthMiddlewareOptions): RequestHandle
         resolved = result.groups
         lookedUpUsername = result.username
       } catch (err) {
-        // 503, not 403. An unreachable dependency is not the same event as a user who is not a member,
-        // and answering 403 risks a client marking the connector unauthorized and demanding re-auth
-        // over a transient blip. The metadata this proxy already publishes names the issuer anyway, so
-        // a 403 here would hide nothing and only cost a misdiagnosis.
+        // The issuer answered 401/403 for this token: it verified locally, but the session behind it is
+        // gone. That is the same event as a token that fails verification, so it gets the same answer —
+        // 401 with invalid_token, which is what makes an OAuth client sign in again. A 503 here left the
+        // client retrying a dead token indefinitely. Not cached: the lookup never remembers a failure.
+        if (err instanceof GroupLookupError && err.tokenRejected) {
+          logger.warn({ sub, status: err.status }, 'issuer rejected the token during group lookup')
+          res.setHeader('www-authenticate', wwwAuthenticateFor('invalid', opts.resourceUrl))
+          res.status(401).json({ error: 'invalid token' })
+          return
+        }
+        // Everything else is 503, not 403 or 401: timeouts, network errors, 5xx, any other 4xx, unreadable
+        // answers. An unreachable or misconfigured dependency is not the same event as a user who is not
+        // a member or a token that is dead, and answering 403 or 401 risks a client marking the connector
+        // unauthorized and demanding re-auth that cannot help. The metadata this proxy already publishes
+        // names the issuer anyway, so a 403 here would hide nothing and only cost a misdiagnosis.
         const reason = err instanceof GroupLookupError ? err.reason : 'unknown'
         logger.error({ sub, reason, detail: (err as Error).message }, 'group lookup failed, refusing request')
         res.setHeader('retry-after', String(RETRY_AFTER_SECONDS))
