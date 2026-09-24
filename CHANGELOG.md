@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.0
+
+The proxy can authenticate itself to the upstream. Additive, off by default.
+
+- **feat(proxy): `MCP_UPSTREAM_BEARER_FILE` sends a static bearer of the proxy's own to the upstream.** Some upstreams authenticate every request with their own API token rather than trusting the proxy's network position. Until now the proxy stripped the caller's `Authorization` and sent nothing, so such an upstream could not sit behind it. With the variable set, every admitted request carries `Authorization: Bearer <file contents>` to the upstream.
+  - The header is set **after** the strip, so the upstream sees the proxy's credential or none, never the caller's IdP token.
+  - It is only ever attached to requests the auth middleware admitted. An unauthenticated request never reaches the proxy handler.
+  - A file, not a value, so the secret can come from a mounted secret file and stay out of the environment. It is read once at startup. A file that is set but unreadable, empty, or holds more than one token stops startup rather than silently sending nothing. Errors name the path, never the contents.
+  - Every admitted caller acts upstream with the same identity. Pair it with `ALLOW_GROUPS` or `ALLOW_SUBS` scoped to the people that identity may serve.
+
+Tests: 116 → 126.
+
 ## 0.6.1
 
 A fix to the group lookup's refusal codes. No configuration change.
