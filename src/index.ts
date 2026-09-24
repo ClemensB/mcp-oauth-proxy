@@ -8,6 +8,7 @@ import { mountProxy } from './proxy.js'
 import { mountRegistration } from './registration.js'
 import { createRateLimiter } from './rate-limit.js'
 import { spawnMcpUpstream, type SpawnedUpstream } from './spawn.js'
+import { readUpstreamBearer } from './upstream-credential.js'
 import { logger } from './logger.js'
 
 const buildApp = (opts: {
@@ -24,6 +25,7 @@ const buildApp = (opts: {
   staticClientSecret: string | undefined
   upstreamPath: string | undefined
   forwardIdentity?: boolean | undefined
+  upstreamBearer?: string | undefined
   scopesSupported?: string[]
   groupCacheTtlSeconds?: number
 }): Express => {
@@ -112,7 +114,12 @@ const buildApp = (opts: {
     })
   })
 
-  mountProxy(app, { upstreamUrl: opts.upstreamUrl, upstreamPath: opts.upstreamPath, forwardIdentity: opts.forwardIdentity })
+  mountProxy(app, {
+    upstreamUrl: opts.upstreamUrl,
+    upstreamPath: opts.upstreamPath,
+    forwardIdentity: opts.forwardIdentity,
+    upstreamBearer: opts.upstreamBearer,
+  })
 
   return app
 }
@@ -122,6 +129,9 @@ export { buildApp }
 const main = async () => {
   const config = loadConfig()
   logger.info({ port: config.port, resourceUrl: config.resourceUrl }, 'starting mcp-oauth-proxy')
+  // Before anything listens or spawns: an unusable credential file stops startup here.
+  const upstreamBearer = config.mcpUpstreamBearerFile ? readUpstreamBearer(config.mcpUpstreamBearerFile) : undefined
+  if (upstreamBearer) logger.info({ file: config.mcpUpstreamBearerFile }, 'sending a static bearer to the upstream')
 
   let spawned: SpawnedUpstream | undefined
   let upstreamUrl: string
@@ -149,6 +159,7 @@ const main = async () => {
     staticClientSecret: config.staticClientSecret,
     upstreamPath: config.mcpUpstreamPath,
     forwardIdentity: config.forwardIdentity,
+    upstreamBearer,
     groupCacheTtlSeconds: config.groupCacheTtlSeconds,
     ...(config.scopesSupported !== undefined && { scopesSupported: config.scopesSupported }),
   })

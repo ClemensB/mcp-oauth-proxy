@@ -30,6 +30,11 @@ const envSchema = z
     // the caller's own X-Forwarded-Client if it sent a well-formed one -- the header names
     // oauth2-proxy and forward-auth setups already use, for an upstream that records provenance.
     FORWARD_IDENTITY: z.enum(['true', 'false']).default('false'),
+    // A file holding a credential for the *upstream*, sent as `Authorization: Bearer <contents>` on
+    // every proxied request after the caller's own credentials are stripped. For an upstream that
+    // authenticates with its own static token rather than trusting this proxy's network position. A
+    // file, not a value, so the secret can come from a mounted secret and stay out of the environment.
+    MCP_UPSTREAM_BEARER_FILE: z.string().min(1).optional(),
     // Upper bound on how long a group lookup that admitted a request is reused. Optional, with a
     // default, so enabling ALLOW_GROUPS against an IdP that needs the lookup requires no new config.
     GROUP_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
@@ -64,6 +69,7 @@ export type Config = {
   staticClientId: string | undefined
   staticClientSecret: string | undefined
   mcpUpstreamPath: string | undefined
+  mcpUpstreamBearerFile: string | undefined
   forwardIdentity: boolean
   scopesSupported: string[] | undefined
   groupCacheTtlSeconds: number
@@ -98,6 +104,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv | Record<string, string | unde
     staticClientId: parsed.STATIC_CLIENT_ID,
     staticClientSecret: parsed.STATIC_CLIENT_SECRET,
     mcpUpstreamPath: parsed.MCP_UPSTREAM_PATH,
+    mcpUpstreamBearerFile: parsed.MCP_UPSTREAM_BEARER_FILE,
     scopesSupported: csv(parsed.SCOPES_SUPPORTED).length > 0 ? csv(parsed.SCOPES_SUPPORTED) : undefined,
     groupCacheTtlSeconds: parsed.GROUP_CACHE_TTL_SECONDS,
   }

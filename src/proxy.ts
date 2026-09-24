@@ -8,6 +8,9 @@ export type ProxyOptions = {
   upstreamPath: string | undefined
   // When true, identity headers are set on every proxied request (see below). Default false.
   forwardIdentity?: boolean | undefined
+  // A credential of the proxy's own for the upstream, set as `Authorization: Bearer` after the
+  // caller's credentials are stripped. Undefined: the upstream receives no Authorization at all.
+  upstreamBearer?: string | undefined
 }
 
 type AuthedRequest = Request & { auth?: { sub: string; email?: string | undefined; username?: string | undefined } }
@@ -62,6 +65,11 @@ export const mountProxy = (app: Express, opts: ProxyOptions) => {
     delete req.headers['authorization']
     delete req.headers['proxy-authorization']
     delete req.headers['cookie']
+
+    // Only after the strip, so the caller's token can never be what the upstream receives: the
+    // upstream sees this proxy's credential or none. Auth has already admitted the caller -- an
+    // unauthenticated request never reaches this handler, so the credential is never lent to one.
+    if (opts.upstreamBearer) req.headers['authorization'] = `Bearer ${opts.upstreamBearer}`
 
     // The caller's own values for the *who* headers are dropped whether or not forwarding is on:
     // only this proxy, having authenticated the request, gets to say who is asking.
